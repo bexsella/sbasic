@@ -3,7 +3,10 @@
  * 
  * TODO:
  *  - Parser
+ *  - String library
+ *  - Module system
  *  - Full syntax
+ *  - Big Numbers
  *  - Interpretter
  */
 #define _RUN_TEST_ 1
@@ -34,8 +37,16 @@ enum token_types_t {
 	TOK_ELSEIF,
 	TOK_ELSE,
 	TOK_ENDIF,
+	TOK_THEN,
+	TOK_FOR,
+	TOK_IN,
+	TOK_NEXT,
+	TOK_STEP,
+	TOK_NOT,
 	TOK_AND,
 	TOK_OR,
+	TOK_TRUE,
+	TOK_FALSE,
 	TOK_MOD,
 	TOK_XOR,
 
@@ -46,6 +57,17 @@ enum token_types_t {
 	TOK_SUBTRACT,
 	TOK_POWER,
 	TOK_EQUALS,
+	TOK_GREATER,
+	TOK_LESS,
+	TOK_NOT_EQUAL,
+	TOK_GREATER_OR_EQUAL,
+	TOK_LESS_OR_EQUAL,
+	TOK_SHIFT_LEFT,
+	TOK_SHIFT_RIGHT,
+	TOK_BIT_OR,
+	TOK_BIT_AND,
+	TOK_BIT_XOR,
+	TOK_BIT_NOT,
 
 	TOK_OPEN_PAREN,
 	TOK_CLOSE_PAREN,
@@ -74,8 +96,16 @@ const char* token_type_strings[TOK_COUNT] = {
 	"ElseIf",
 	"Else",
 	"EndIf",
+	"Then",
+	"For",
+	"In",
+	"Next",
+	"Step",
+	"Not",
 	"And",
 	"Or",
+	"True",
+	"False",
 	"Mod",
 	"Xor",
 
@@ -86,6 +116,17 @@ const char* token_type_strings[TOK_COUNT] = {
 	"-",
 	"**",
 	"=",
+	">",
+	"<",
+	"<>",
+	">=",
+	"<=",
+	"<<",
+	">>",
+	"|",
+	"&",
+	"^",
+	"!",
 
 	"Open Paren",
 	"Close Paren",
@@ -190,10 +231,14 @@ void sb_tokensier_check_keyword(tokeniser_t* t, token_t* tok)
 {
 	for (int i = TOK_PROCEDURE; i <= TOK_XOR; i++)
 	{
-		if (!strncasecmp(tok->data, token_type_strings[i], tok->data_len))
+		// TODO: Write a proper string handling library, and we can avoid this nonsense. (ODIN IS CALLING)
+		if (!strncasecmp(tok->data, token_type_strings[i], strlen(token_type_strings[i])))
 		{
-			tok->type = i;
-			return;
+			if (strlen(token_type_strings[i]) == tok->data_len)
+			{
+				tok->type = i;
+				return;
+			}
 		}
 	}
 }
@@ -201,102 +246,164 @@ void sb_tokensier_check_keyword(tokeniser_t* t, token_t* tok)
 int sb_tokeniser_next_token(tokeniser_t* t, token_t* tok)
 {
 	tok->type = TOK_UNKNOWN;
-	tok->pos = t->pos;
 
-	if (sb_tokeniser_is_whitespace(t->current_char))
+	while (tok->type == TOK_UNKNOWN)
 	{
-		sb_tokeniser_skip_whitespace(t);
-	}
+		if (sb_tokeniser_is_whitespace(t->current_char))
+		{
+			sb_tokeniser_skip_whitespace(t);
+		}
 
-	char ch = t->current_char;
-	tok->pos = t->pos;
+		char ch = t->current_char;
+		tok->pos = t->pos;
 
-	/**
-	 * TODO: Remove all the sb_tokeniser_next_char calls out of each of the if/else if blocks
-	 * and be smarter about it.
-	 */
-	if (ch == 0)
-	{
-		tok->data = NULL;
-		tok->data_len = 0;
-		tok->type = TOK_EOF;
+		if (ch == '\0')
+		{
+			tok->data = NULL;
+			tok->data_len = 0;
+			tok->type = TOK_EOF;
 
-		return TOK_ERR_EOF;
-	}
-	else if (ch >= '0' && ch <= '9')
-	{
-		sb_tokeniser_skip_numeric(t);
-		tok->type = TOK_NUMBER;
-	}
-	else if (ch >= 'A' && ch <= 'z')
-	{
-		sb_tokeniser_skip_alphanumeric(t);
+			return TOK_ERR_EOF;
+		}
+		else if (ch >= '0' && ch <= '9')
+		{
+			sb_tokeniser_skip_numeric(t);
+			tok->type = TOK_NUMBER;
+		}
+		else if (ch >= 'A' && ch <= 'z')
+		{
+			sb_tokeniser_skip_alphanumeric(t);
+			tok->type = TOK_IDENTIFIER;
+		}
+		else if (ch == ';')
+		{
+			sb_tokeniser_skip_to_eol(t);
+			tok->type = TOK_COMMENT;
+		}
+		else if (ch == '(')
+		{
+			tok->type = TOK_OPEN_PAREN;
+			sb_tokeniser_next_char(t);
+		}
+		else if (ch == ')')
+		{
+			tok->type = TOK_CLOSE_PAREN;
+			sb_tokeniser_next_char(t);
+		}
+		else if (ch == ',')
+		{
+			tok->type = TOK_COMMA;
+			sb_tokeniser_next_char(t);
+		}
+		else if (ch == '"')
+		{
+			sb_tokeniser_skip_string(t);
 
-		tok->type = TOK_IDENTIFIER;
-	}
-	else if (ch == ';')
-	{
-		sb_tokeniser_skip_to_eol(t);
-		tok->type = TOK_COMMENT;
-	}
-	else if (ch == '(')
-	{
-		tok->type = TOK_OPEN_PAREN;
+			tok->type = TOK_STRING;
 
-		sb_tokeniser_next_char(t);
-	}
-	else if (ch == ')')
-	{
-		tok->type = TOK_CLOSE_PAREN;
-		sb_tokeniser_next_char(t);
-	}
-	else if (ch == ',')
-	{
-		tok->type = TOK_COMMA;
+			sb_tokeniser_next_char(t);
+		}
+		else if (ch == '*')
+		{
+			if (sb_tokeniser_peek_char(t) == '*')
+			{
+				sb_tokeniser_next_char(t);
+				tok->type = TOK_POWER;
+			}
+			else
+			{
+				tok->type = TOK_MULTIPLY;
+			}
 
-		sb_tokeniser_next_char(t);
-	}
-	else if (ch == '"')
-	{
-		sb_tokeniser_skip_string(t);
+			sb_tokeniser_next_char(t);
+		}
+		else if (ch == '/')
+		{
+			tok->type = TOK_DIVIDE;
+			sb_tokeniser_next_char(t);
+		}
+		else if (ch == '+')
+		{
+			tok->type = TOK_ADD;
+			sb_tokeniser_next_char(t);
+		}
+		else if (ch == '-')
+		{
+			tok->type = TOK_SUBTRACT;
+			sb_tokeniser_next_char(t);
+		}
+		else if (ch == '=')
+		{
+			tok->type = TOK_EQUALS;
+			sb_tokeniser_next_char(t);
+		}
+		else if (ch == '>')
+		{
+			if (sb_tokeniser_peek_char(t) == '=')
+			{
+				tok->type = TOK_GREATER_OR_EQUAL;
+				sb_tokeniser_next_char(t);
+			}
+			else if (sb_tokeniser_peek_char(t) == '>')
+			{
+				tok->type = TOK_SHIFT_RIGHT;
+				sb_tokeniser_next_char(t);
+			}
+			else
+			{
+				tok->type = TOK_GREATER;
+			}
 
-		tok->type = TOK_STRING;
+			sb_tokeniser_next_char(t);
+		}
+		else if (ch == '<')
+		{
+			if (sb_tokeniser_peek_char(t) == '>')
+			{
+				tok->type = TOK_NOT_EQUAL;
+				sb_tokeniser_next_char(t);
+			}
+			else if (sb_tokeniser_peek_char(t) == '=')
+			{
+				tok->type = TOK_LESS_OR_EQUAL;
+				sb_tokeniser_next_char(t);
+			}
+			else if (sb_tokeniser_peek_char(t) == '<')
+			{
+				tok->type = TOK_SHIFT_LEFT;
+				sb_tokeniser_next_char(t);
+			}
+			else
+			{
+				tok->type = TOK_LESS;
+			}
 
-		sb_tokeniser_next_char(t);
-	}
-	else if (ch == '*')
-	{
-		if (sb_tokeniser_peek_char(t) == '*')
+			sb_tokeniser_next_char(t);
+		}
+		else if (ch == '|')
+		{
+			tok->type = TOK_BIT_OR;
+			sb_tokeniser_next_char(t);
+		}
+		else if (ch == '&')
+		{
+			tok->type = TOK_BIT_AND;
+			sb_tokeniser_next_char(t);
+		}
+		else if (ch == '^')
+		{
+			tok->type = TOK_BIT_XOR;
+			sb_tokeniser_next_char(t);
+		}
+		else if (ch == '!')
+		{
+			tok->type = TOK_BIT_NOT;
+			sb_tokeniser_next_char(t);
+		}
+		else if (ch == '\n')
 		{
 			sb_tokeniser_next_char(t);
-			tok->type = TOK_POWER;
 		}
-		else
-		{
-			tok->type = TOK_MULTIPLY;
-		}
-
-		sb_tokeniser_next_char(t);
-	}
-	else if (ch == '/')
-	{
-		tok->type = TOK_DIVIDE;
-		sb_tokeniser_next_char(t);
-	}
-	else if (ch == '+')
-	{
-		tok->type = TOK_ADD;
-		sb_tokeniser_next_char(t);
-	}
-	else if (ch == '-')
-	{
-		tok->type = TOK_SUBTRACT;
-		sb_tokeniser_next_char(t);
-	}
-	else if (ch == '=')
-	{
-		tok->type = TOK_EQUALS;
-		sb_tokeniser_next_char(t);
 	}
 
 	tok->data = t->data + tok->pos.offset;
@@ -327,8 +434,6 @@ char sb_tokeniser_next_char(tokeniser_t* t)
 	{
 		t->pos.row++;
 		t->pos.column = 0;
-		t->pos.offset++;
-		t->current_char = *(t->data + t->pos.offset);
 	}
 
 	return t->current_char;
@@ -359,9 +464,14 @@ tokeniser_t sb_tokeniser_new(char* data)
 int main(int argc, char* argv[])
 {
 	char* TEST_PROGRAM = {
-	"Procedure Main()\n" \
-	"    D = 1234 ** 56\n" \
-	"    Print \"Hello, world!\\n\" ;  can i have a comment here?\n" \
+	"Procedure Main()\n"
+	"    D = 1234**56/7\n"
+	"    If D>100 then\n"
+	"        Print \"This is a big number!\\n\"\n"
+	"    Endif\n\n"
+	"    For XorVal=1 In 10 Step 2\n"
+	"        Print \"Hello, world!\\n\" + D ;  can i have a comment here?\n"
+	"    Next\n"
 	"EndProcedure"
 	};
 
