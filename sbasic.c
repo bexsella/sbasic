@@ -24,10 +24,19 @@ extern "C" {
 #include <string.h>
 #include <stdio.h>
 
-// absolute trash:
+	// absolute trash:
 #ifdef _MSC_VER
 #define strncasecmp _strnicmp
 #endif
+
+enum sb_os_error_t
+{
+	SBOS_ERR_NONE,
+	SBOS_ERR_OUT_OF_MEMORY,
+	SBOS_ERR_FILE_NOT_FOUND,
+};
+
+int sb_os_read_all_file(const char* file_path, uint8_t* out_buffer, size_t* len);
 
 typedef struct {
 	uint8_t sign : 1;
@@ -190,6 +199,12 @@ typedef struct {
 tokeniser_t sb_tokeniser_new(char* data);
 int sb_tokeniser_next_token(tokeniser_t* t, token_t* tok);
 
+enum sb_parser_error_t
+{
+	SB_PARSER_ERR_NONE,
+	SB_PARSER_ERR_UNEXPECTED_TOKEN,
+};
+
 enum expression_types_t {
 	EXPR_GROUP,
 	EXPR_BINARY,
@@ -250,6 +265,7 @@ typedef struct {
 	const char* file_path;
 	tokeniser_t tokeniser;
 	ast_node_t* ast_root;
+	token_t current_token;
 	token_t last_token;
 } parser_t;
 
@@ -310,6 +326,33 @@ typedef struct {
 #define SB_BASIC_FREE(ptr) free(ptr)
 #define SB_BASIC_REALLOC(ptr, s) realloc(ptr, s)
 #endif
+
+int sb_os_read_all_file(const char* file_path, uint8_t* out_buffer, size_t* len)
+{
+	FILE* fp = fopen(file_path, "r");
+
+	if (!fp)
+	{
+		return SBOS_ERR_FILE_NOT_FOUND;
+	}
+
+	fseek(fp, 0, SEEK_END);
+	const size_t file_len = ftell(fp);
+	fseek(fp, 0, SEEK_SET);
+
+	uint8_t* buffer = SB_BASIC_ALLOC(file_len);
+
+	if (!buffer)
+	{
+		return SBOS_ERR_OUT_OF_MEMORY;
+	}
+
+	fread(out_buffer, 1, file_len, fp);
+	fclose(fp);
+
+	*len = file_len;
+	return SBOS_ERR_NONE;
+}
 
 /**
  * Big Number Support
@@ -548,7 +591,7 @@ int sb_tokeniser_next_token(tokeniser_t* t, token_t* tok)
 			sb_tokeniser_skip_whitespace(t);
 		}
 
-		char ch = t->current_char;
+		const char ch = t->current_char;
 		tok->pos = t->pos;
 
 		if (ch == '\0')
@@ -776,7 +819,6 @@ void sb_parser_print_expr(const expression_t* expr)
 	switch (expr->type)
 	{
 	case EXPR_BINARY:
-
 	case EXPR_GROUP:
 	case EXPR_UNARY:
 	case EXPR_LITERAL:
@@ -788,44 +830,40 @@ void sb_parser_print_expr(const expression_t* expr)
 
 parser_t sb_parser_new(const char* file_path)
 {
+	char* file_content = NULL;
+	size_t content_len;
+
+	if (sb_os_read_all_file(file_path, file_content, &content_len) != SBOS_ERR_NONE)
+	{
+		return (parser_t) { 0 };
+	}
 
 	return (parser_t) {
 		.file_path = file_path,
-		.tokeniser = sb_tokeniser_new(""),
+		.tokeniser = sb_tokeniser_new(file_content),
 	};
+}
+
+int sb_parser_parse(parser_t* p)
+{
+	p->last_token = p->current_token;
+	sb_tokeniser_next_token(&p->tokeniser, &p->current_token);
+
+	if (p->current_token.type == TOK_INVALID)
+	{
+		printf("Unknown/Invalid token at %zu:%zu\n",
+			p->current_token.pos.row, p->current_token.pos.column);
+		return SB_PARSER_ERR_UNEXPECTED_TOKEN;
+	}
+
+	return SB_PARSER_ERR_NONE;
 }
 
 #if _RUN_TEST_
 
 int main(int argc, char* argv[])
 {
-	char* TEST_PROGRAM = {
-	"Procedure Main()\n"
-	"    D = 1234**56/7\n"
-	"    If D>100 then\n"
-	"        Print \"This is a \\\"big\\\" number!\\n\"\n"
-	"    Endif\n\n"
-	"    For XorVal=1 In 10 Step 2\n"
-	"        Print \"Hello, world!\\n\" + D ;  can i have a comment here?\n"
-	"    Next##\n"
-	"EndProcedure"
-	};
-
-	printf("%s\n\n", TEST_PROGRAM);
-
-	tokeniser_t tokeniser = sb_tokeniser_new(TEST_PROGRAM);
-	token_t tok;
-
-	while (sb_tokeniser_next_token(&tokeniser, &tok) == TOK_ERR_NONE)
-	{
-		printf("%s\n", token_type_strings[tok.type]);
-	}
-
-	if (tok.type == TOK_INVALID)
-	{
-		printf("Unknown/Invalid token at %zu:%zu\n", tok.pos.row, tok.pos.column);
-		return -1;
-	}
+	parser_t parser = sb_parser_new("tests/test.bas");
 
 	sb_parser_print_expr(&(expression_t) {
 		.type = EXPR_BINARY,
